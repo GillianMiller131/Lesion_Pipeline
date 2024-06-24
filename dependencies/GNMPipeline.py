@@ -485,7 +485,8 @@ def easy_reg(working_dir, source_brain, target_brain, tag, target_brain_seg=None
              
     if other_brains:
         for brain in other_brains:
-            brain_name=os.path.basename(brain).split('.')[0]
+            # brain_name=os.path.basename(brain).split('.')[0]
+            brain_name=os.path.basename(brain).split('_space')[0]
             cmd +=f"mri_easywarp --i {brain} --o {working_dir}/{brain_name}_{tag}.nii.gz --field {working_dir}/{source_name}_{tag}Warp.nii.gz\n"
 
     return cmd
@@ -552,7 +553,8 @@ def ants_mni(working_dir, patient_brain, MNI_template, lesion_mask=None, other_b
 
     if other_brains:
         for other_brain in other_brains:
-            brain_stem=os.path.basename(other_brain).split('.')[0]
+            #brain_stem=os.path.basename(other_brain).split('.')[0]
+            brain_stem=os.path.basename(other_brain).split('_space')[0]
             other_brain_cmd = [
                 'antsApplyTransforms', 
                 '-d', '3', 
