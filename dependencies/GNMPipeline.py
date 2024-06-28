@@ -2,6 +2,7 @@ import os
 import shutil
 from glob import glob
 from nilearn import plotting
+import nibabel as nib
 import subprocess
 import sys
 import matplotlib_inline
@@ -9,6 +10,7 @@ from tqdm import tqdm
 import tempfile
 from pathlib import Path
 from time import sleep
+import numpy as np
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
 
@@ -48,7 +50,7 @@ def create_input_dict(input_folder, subjects_to_skip=None, input_type='Folder'):
     subject_sessions (dict): A dictionary where the keys are the subject IDs and the values are lists of sessions for each subject.
 
     Note:
-    If input_type is 'BIDS', the function assumes that the input folder is organized according to the BIDS format.
+    If input_type is 'BIDS', the function assumes that the input folder is organized with subject folders containing session folders.
     If input_type is 'Folder', the function assumes that all selected scans are in one folder and the file names start with the subject ID followed by an underscore.
     """
     
@@ -77,8 +79,6 @@ def create_input_dict(input_folder, subjects_to_skip=None, input_type='Folder'):
         
     
     elif input_type=='Folder':
-        #All selected scans are in one folder
-        #Assumptions: first part of file name is subject ID followed by an _
         subjects=sorted(set([os.path.basename(i).split('_')[0] for i in glob(f'{input_folder}/*.nii*')]))
         
         if subjects_to_skip is not None:
@@ -99,15 +99,13 @@ def create_input_dict(input_folder, subjects_to_skip=None, input_type='Folder'):
 
 
         print(subject_sessions)
-
     
     else:
         raise ValueError(f"Invalid input_type: '{input_type}'. Should be either 'BIDS' or 'Folder'.")
     
-    
     return subject_sessions
  
-def submit_slurm_job(job_name, command, partition="bch-compute", nodes=1, ntasks=1, cpus=16, mem="50G", time="24:00:00", sleep_time=5):
+def submit_slurm_job(job_name, command, partition="bch-compute", nodes=1, ntasks=1, cpus=16, mem="32G", time="10:00:00", sleep_time=5):
     
     
     """
@@ -116,16 +114,28 @@ def submit_slurm_job(job_name, command, partition="bch-compute", nodes=1, ntasks
     This function creates a script that has the given command, and then submits this script to the Slurm job scheduler.
     
     Parameters:
-    job_name (str): A name for the job. This will help you identify the job later.
-    command (str): The command that you want to run.
-    partition (str): The partition on the cluster where you want to run the job. Defaults to "bch-compute".
-    nodes (int): The number of nodes (computers) that you want to use to run the job. Defaults to 1.
-    cpus_per_task (int): The number of CPUs (processing units) that you want to use on each node. Defaults to 16.
-    mem (str): The amount of memory that you want to use on each node. Defaults to "50GB".
-    time (str): The maximum amount of time that the job is allowed to run. Defaults to "10:00:00" (10 hours).
+    job_name : str
+        A name for the job. This will help you identify the job later.
+    command : str
+        The command that you want to run.
+    partition : str, optional
+        The partition on the cluster where you want to run the job. Defaults to "bch-compute".
+    nodes : int, optional
+        The number of nodes (computers) that you want to use to run the job. Defaults to 1.
+    ntasks : int, optional
+        The number of tasks (or processes) to use for the computation. Default is 1.
+    cpus_per_task : int, optional
+        The number of CPUs (processing units) that you want to use on each node. Defaults to 16.
+    mem : str, optional
+        The amount of memory that you want to use on each node. Defaults to "32G".
+    time : str, optional
+        The maximum amount of time that the job is allowed to run. Defaults to "10:00:00" (10 hours).
+    sleep_time : int, optional
+        The number of seconds the function will wait (sleep) before returning. Defaults to 5. 
 
     Returns:
-    job_id (str): The ID of the job that was submitted. You can use this ID to check on the status of the job later.
+    job_id : str
+        The ID of the job that was submitted. You can use this ID to check on the status of the job later.
     """
 
     
@@ -180,21 +190,33 @@ def submit_slurm_job_test(job_name, command, partition="bch-compute", nodes=1, n
     
     
     """
-    Submits a job to the Slurm job scheduler.
+    Creates an SBATCH file, but does not submit it to SLURM
 
-    This function creates a script that has the given command, and then submits this script to the Slurm job scheduler.
+    This function creates and saves a script that has the given command.
     
     Parameters:
-    job_name (str): A name for the job. This will help you identify the job later.
-    command (str): The command that you want to run.
-    partition (str): The partition on the cluster where you want to run the job. Defaults to "bch-compute".
-    nodes (int): The number of nodes (computers) that you want to use to run the job. Defaults to 1.
-    cpus_per_task (int): The number of CPUs (processing units) that you want to use on each node. Defaults to 16.
-    mem (str): The amount of memory that you want to use on each node. Defaults to "50GB".
-    time (str): The maximum amount of time that the job is allowed to run. Defaults to "10:00:00" (10 hours).
+    ----------
+    job_name : str
+        A name for the job. This will help you identify the job later.
+    command : str
+        The command that you want to run.
+    partition : str, optional
+        The partition on the cluster where you want to run the job. Defaults to "bch-compute".
+    nodes : int, optional
+        The number of nodes (computers) that you want to use to run the job. Defaults to 1.
+    ntasks : int, optional
+        The number of tasks (or processes) to use for the computation. Defaults to 1.
+    cpus : int, optional
+        The number of CPUs (processing units) that you want to use on each node. Defaults to 16.
+    mem : str, optional
+        The amount of memory that you want to use on each node. Defaults to "50G".
+    time : str, optional
+        The maximum amount of time that the job is allowed to run. Defaults to "24:00:00" (24 hours).
 
     Returns:
-    job_id (str): The ID of the job that was submitted. You can use this ID to check on the status of the job later.
+    -------
+    None
+    
     """
 
     
@@ -233,16 +255,14 @@ def set_registration_target(file_names, target1, target2):
 
     Parameters:
     file_names (list): A list of file names.
+    target1 (str): Ideal file type for registration. Case sensitive. 
+    target2 (str): Back-up file type for registration if first not avaiable. Case sensitive. 
 
     Returns:
-    reg_target (str): The registration target.
+    reg_target (str): The available registration target file type. 
     
-    Note:
-    The function checks if any of the file names contain the registration target strings (Reg_target_1 or Reg_target_2).
-    If no registration target is found, a ValueError is raised.
     """
         
-
     reg_target = None
     for file_name in file_names:
         if target1 in file_name:
@@ -260,18 +280,13 @@ def set_registration_target(file_names, target1, target2):
 
 def combine_images(working_dir, list_of_images, out_name, clean_up=True):
 
-
-#def combine_images(working_dir, input_dir, participant, session, image_type, list_of_images, clean_up=True):
     """
-    Combines images of different directions using niftymic.
+    Generates a command to combine images of different directions using niftymic.
     
     Parameters:
     working_dir (str): The working directory.
-    input_dir (str): The input directory.
-    participant (str): The participant ID.
-    session (str): The session ID.
-    image_type (str): The image type.
-    list_of_images (list): The list of images to combine.
+    list_of_images (list of Nifti-like objects): The list of images to combine.
+    out_name (str): The name of the output image. 
     clean_up (bool): Whether to clean up temporary files. Default is True.
     
     Returns:
@@ -318,14 +333,13 @@ def combine_images(working_dir, list_of_images, out_name, clean_up=True):
     return command
 
 def reslice_image(input_image):
+    
     """
-    Reslices an image to 1mm isovolumetric if the largest pixel dimension is greater than 1.5mm.
+    Reslices an image to 1mm isovolumetric if the largest pixel dimension is greater than 1.5mm
     
     Parameters:
-    input_folder (str): The input folder.
-    participant (str): The participant ID.
-    session (str): The session ID.
-    reg_target (str): The registration target.
+    input_image (path to Nifti-like object): The input image to be resliced.
+
     """
     
     if not os.path.exists(input_image):
@@ -350,17 +364,15 @@ def reslice_image(input_image):
         print(f"Largest pixel dimension is {max_pixelwidth}, leaving image alone")
         
 
-def bias_corr(input_image, image_type, skullstrip=None, clean_up=True):
+def bias_corr(input_image, image_type, skullstrip='synthstrip', clean_up=True):
     """
-    Performs bias correction on an image.
+    Generates a command to bias correct, crop, and reorient an image using fsl_anat_alt.sh
     
     Parameters:
-    input_folder (str): The input folder.
-    participant (str): The participant ID.
-    session (str): The session ID.
-    reg_target (str): The registration target.
-    mask (bool): Whether to create a brain mask. Default is True.
-    clean_up (bool): Whether to clean up temporary files. Default is True.
+    input_image (path to Nifti-like object): Image to Bias correct. 
+    image_type (str): Should be T1w or T2w for bias correction.
+    skullstrip (str): Software to use for skull stripping. Should be 'optibet', 'synthstrip', 'both' or None. Defaults to 'synthstrip'. 
+    clean_up (bool): Whether to clean up temporary files. Default is True. 
     
     Returns:
     cmd (str): The command to run.
@@ -408,14 +420,14 @@ def bias_corr(input_image, image_type, skullstrip=None, clean_up=True):
 def co_register(working_dir, target_image, moving_image, tag="", brain_mask=None, clean_up=True):
     
     """
-    Co-registers a moving image to a registration target.
+    Generates a command to co-register a moving image to a registration target.
 
     Parameters:
     working_dir (str): The working directory.
-    reg_image (str): The registration target image.
-    moving_image (str): The moving image.
-    tag(str): Label to add to the filename of coregistered images
-    skullstrip (bool): Whether to skullstrip the image. Default is True.
+    target_image (path to Nifti-like object): The registration target image.
+    moving_image (path to Nifti-like object): The moving image.
+    tag (str): Label to add to the end of the name of outputs.
+    brain_mask (path to Nifti-like object): Path to the brain mask of the target image to use to skull strip co-registed images. Defulat is None.
     clean_up (bool): Whether to clean up temporary files. Default is True.
 
     Returns:
@@ -447,11 +459,25 @@ def co_register(working_dir, target_image, moving_image, tag="", brain_mask=None
                         
     return cmd
 
-def synthseg_wrapper(input_list,output_list,synthseg_robust=True, clean_up=False):
+def synthseg_wrapper(input_list,output_list=[],synthseg_robust=True, clean_up=False):
+    
+    """
+    Generates a command to run synthseg on a list of input images. Faster than instantiating individual calls.
+    
+    Parameters:
+    input_list (list of Nifti-like objects): Paths to files to segment.
+    output_list (list of output files paths, optional): Paths the output segmentations will be saved. If none provided, appends '_synthseg' to input name. 
+    
+    Returns:
+    command (str): The command to run.
+    """
     
     if os.path.exists("synthseg_inputs.txt") or os.path.exists("synthseg_outputs.txt"):
         print(f"WARNING:  synthseg_inputs.txt and/or synthseg_outputs.txt already exists. Please delete them or use them directly.")
         raise FileExistsError("Existing files detected")
+    
+    if not output_list:
+        output_list=[i.split('.')[0]+'_synthseg.nii.gz' for i in input_list]
             
     with open("synthseg_inputs.txt", "w") as file:
             for item in input_list:
@@ -473,74 +499,105 @@ def synthseg_wrapper(input_list,output_list,synthseg_robust=True, clean_up=False
     command=" ".join(cmd)
     return command
 
-def easy_reg(working_dir, source_brain, target_brain, target_brain_seg=None, source_brain_seg=None, lesion_mask=None, tag="", other_brains=[], synthseg_robust=True):
+def easy_reg(working_dir, source_brain, target_brain, target_brain_seg=None, source_brain_seg=None, lesion_mask=None, tag="", other_brains=[], synthseg_robust=False, affine=False):
+    
+    """
+    Generates a command to run the EasyReg pipeline for brain image registration and optional lesion masking.
+
+    Parameters:
+    working_dir (str): Directory where output files will be saved.
+    source_brain (str): Path to the source brain image.
+    target_brain (str): Path to the target brain image.
+    target_brain_seg (str, optional): Path to the target brain segmentation. Default is None.
+    source_brain_seg (str, optional): Path to the source brain segmentation. Default is None.
+    lesion_mask (str, optional): Path to the lesion mask. Default is None.
+    tag (str, optional): Additional tag for output file naming. Default is an empty string.
+    other_brains (list, optional): List of other brain images to be registered to the target. Default is an empty list.
+    synthseg_robust (bool, optional): Whether to use the robust mode for SynthSeg. Default is False.
+    affine (bool, optional): Whether to run affine-only registration. Default is False
+
+    Returns:
+    str: The command to run the EasyReg pipeline.
+    """
 
     source_name=os.path.basename(source_brain).split('.')[0]
     target_name=os.path.basename(target_brain).split('.')[0]
     out_name=f'{source_name}_to_{target_name}{tag}'
+    
+    if source_brain_seg is None:
+        source_brain_seg = f'{working_dir}/{source_name}_synthseg.nii.gz'
 
-    cmd = f'echo Running EasyReg for {source_brain}\n'
-    cmd += "source activate easyreg\n"
-    cmd += 'LD_LIBRARY_PATH=/opt/ohpc/pub/mpi/openmpi3-gnu8/3.1.4/lib:/opt/ohpc/pub/compiler/gcc/8.3.0/lib64\n'
-    cmd += 'CUDNN_PATH=$(dirname $(python -c "import nvidia.cudnn;print(nvidia.cudnn.__file__)"))\n'
-    cmd += 'export LD_LIBRARY_PATH=$CUDNN_PATH/lib:/lab-share/Neuro-Cohen-e2/Public/environment/conda/easyreg/lib/python3.9/site-packages/tensorrt_libs/:$LD_LIBRARY_PATH:\n'
+    if target_brain_seg is None:
+        target_brain_seg = f'{working_dir}/{target_name}_synthseg.nii.gz'
+
+    cmd = [
+        f'echo Running EasyReg for {source_brain}',
+        'source activate easyreg',
+        'LD_LIBRARY_PATH=/opt/ohpc/pub/mpi/openmpi3-gnu8/3.1.4/lib:/opt/ohpc/pub/compiler/gcc/8.3.0/lib64',
+        'CUDNN_PATH=$(dirname $(python -c "import nvidia.cudnn;print(nvidia.cudnn.__file__)"))',
+        'export LD_LIBRARY_PATH=$CUDNN_PATH/lib:/lab-share/Neuro-Cohen-e2/Public/environment/conda/easyreg/lib/python3.9/site-packages/tensorrt_libs/:$LD_LIBRARY_PATH:\n'
+    ]
 
     if synthseg_robust:
-        cmd +=f"mri_synthseg --i {source_brain} --o {working_dir}/{source_name}_synthseg.nii.gz --parc --robust\n"
-    
-    if source_brain_seg == None:
-        source_brain_seg=f'{working_dir}/{source_name}_synthseg.nii.gz'
-    
-    if target_brain_seg == None:
-        target_brain_seg=f'{working_dir}/{target_name}_synthseg.nii.gz'
+        cmd.append(f"mri_synthseg --i {source_brain} --o {source_brain_seg} --parc --robust\n")
+
         
-    cmd += ' '.join([
+    mri_easyreg_cmd = [
         'mri_easyreg',
         '--ref', target_brain,
         '--flo', source_brain,
         '--ref_seg', target_brain_seg,
         '--flo_seg', source_brain_seg,
         '--flo_reg', f'{working_dir}/{out_name}.nii.gz',
-        '--fwd_field', f'{working_dir}/{out_name}Warp.nii.gz\n'
-    ])
+        '--fwd_field', f'{working_dir}/{out_name}Warp.nii.gz',
+        '--threads', '-1'
+    ]
 
+    if affine:
+        mri_easyreg_cmd.append('--affine_only')
+    
+    cmd.append(' '.join(mri_easyreg_cmd) + '\n')
     
     if lesion_mask:
-        cmd +=f"mri_easywarp --i {lesion_mask} --o {working_dir}/{out_name}_lesion.nii.gz --field {working_dir}/{out_name}Warp.nii.gz --nearest\n"
-             
+        cmd.append(f"mri_easywarp --i {lesion_mask} --o {working_dir}/{out_name}_lesion.nii.gz --field {working_dir}/{out_name}Warp.nii.gz --nearest\n")
+
     if other_brains:
         for brain in other_brains:
-            brain_name=os.path.basename(brain).split('.')[0]
-            #brain_name=os.path.basename(brain).split('_space')[0]
-            cmd +=f"mri_easywarp --i {brain} --o {working_dir}/{brain_name}_to_{target_name}{tag}.nii.gz --field {working_dir}/{out_name}Warp.nii.gz\n"
-    
-    cmd +=f"mkdir {working_dir}/warps_{out_name}"
-    cmd +=f"mv {working_dir}/{out_name}Warp.nii.gz {working_dir}/warps_{out_name}"
-    cmd +=f"mv {source_brain_seg} {working_dir}/warps_{out_name}"
+            brain_name = os.path.basename(brain).split('.')[0]
+            cmd.append(f"mri_easywarp --i {brain} --o {working_dir}/{brain_name}_to_{target_name}{tag}.nii.gz --field {working_dir}/{out_name}Warp.nii.gz\n")
+
+    cmd.append(f"mkdir {working_dir}/warps_{out_name}\n")
+    cmd.append(f"mv {working_dir}/{out_name}Warp.nii.gz {working_dir}/warps_{out_name}\n")
+    cmd.append(f"mv {source_brain_seg} {working_dir}/warps_{out_name}\n")
     
     if os.path.exists(f'{working_dir}/{target_name}_synthseg.nii.gz'):
         cmd +=f"mv f'{working_dir}/{target_name}_synthseg.nii.gz' {working_dir}/warps_{out_name}"
     
-    return cmd
+    return "\n".join(cmd)
          
 def ants_mni(working_dir, patient_brain, MNI_template, lesion_mask=None, other_brains=[], tag="", transform='s', histogram_matching=False, quick=False):
     
     """
-    Co-registers a moving image to a registration target.
+    Generates a command to run ANTs registration of a patient brain to an MNI template, with optional lesion masking and additional brain images.
 
     Parameters:
-    working_dir (str): The working directory.
-    patient_brain (str): Path to the patient brain to register.
-    MNI_template (str): Path to the MNI template to register to. 
-    lesion_mask (str, optional): Patient space lesion mask to apply warp field to. Must be in same space as patient_brain.
-    other_brains (list, optional): Other patient brain to apply warp field to. Must be in same space as patient_brain.
-    skullstrip (bool): Whether to skullstrip the image. Default is True.
-    clean_up (bool): Whether to clean up temporary files. Default is True.
+    working_dir (str): Directory where output files will be saved.
+    patient_brain (str): Path to the patient brain image.
+    MNI_template (str): Path to the MNI template image.
+    lesion_mask (str, optional): Path to the lesion mask. Default is None.
+    other_brains (list, optional): List of other brain images to be warped to the MNI template. Default is an empty list.
+    tag (str, optional): Additional tag for output file naming. Default is an empty string.
+    transform (str, optional): Transformation type. Default is 's'.
+        's' for rigid + affine + deformable syn (3 stages)
+        'b' for rigid + affine + deformable b-spline syn (3 stages)
+        'a' for rigid + affine (2 stages)
+    histogram_matching (bool, optional): Whether to use histogram matching. Default is False.
+    quick (bool, optional): Whether to use the quick version of ANTs registration. Default is False.
 
     Returns:
-    cmd (str): The command to run.
+    str: The command to run the ANTs registration pipeline.
     """
-    
+
     patient_stem=os.path.basename(patient_brain).split('.')[0]
     
     
@@ -593,7 +650,7 @@ def ants_mni(working_dir, patient_brain, MNI_template, lesion_mask=None, other_b
             "-o", f"{working_dir}/{patient_stem}_to_MNI{tag}_lesion.nii.gz\n"
         ]
         
-        command_string += " && " + " ".join(lesion_cmd)
+        command_string += "\n\n" + " ".join(lesion_cmd)
     
 
     if other_brains:
@@ -611,18 +668,72 @@ def ants_mni(working_dir, patient_brain, MNI_template, lesion_mask=None, other_b
                 "-o", f"{working_dir}/{brain_stem}_to_MNI{tag}.nii.gz\n"
             ]
         
-            command_string += " && " + " ".join(other_brain_cmd)
+            command_string += "\n\n" + " ".join(other_brain_cmd)
               
     return command_string
 
 class BrainImageMetrics:
+    
+    """
+    A class to compute similarity metrics between two brain images.
+
+    Attributes:
+    -----------
+    img1 : nib.Nifti1Image
+        The first brain image loaded using nibabel.
+    img2 : nib.Nifti1Image
+        The second brain image loaded using nibabel.
+    mask1 : np.ndarray
+        Binary mask of the first brain image, where non-zero voxels are set to 1.
+    mask2 : np.ndarray
+        Binary mask of the second brain image, where non-zero voxels are set to 1.
+
+    Methods:
+    --------
+    compute_dice_coefficient():
+        Computes the Dice similarity coefficient between the two brain images.
+
+    compute_jaccard_coefficient():
+        Computes the Jaccard similarity coefficient between the two brain images.
+
+    compute_non_overlapping_percentage():
+        Computes the percentage of non-overlapping voxels between the two brain images.
+    
+    Example Usage:
+    --------------
+    metrics_calculator = BrainImageMetrics(brain_path1, brain_path2)
+    
+    dice_coefficient, jaccard_coefficient, non_overlapping_percentage = metrics_calculator.compute_metrics()
+    dice_coefficient = metrics_calculator.compute_dice_coefficient()
+    
+    """
+    
     def __init__(self, brain_path1, brain_path2):
+        
+        """
+        Initializes the BrainImageMetrics class with two brain image paths.
+
+        Parameters:
+        -----------
+        brain_path1 : str to Nifti-like object
+            File path to the first brain image.
+        brain_path2 : str to Nifti-like object
+            File path to the second brain image.
+        """
         self.img1 = nib.load(brain_path1)
         self.img2 = nib.load(brain_path2)
         self.mask1 = (np.array(self.img1.dataobj) > 0).astype(int)
         self.mask2 = (np.array(self.img2.dataobj) > 0).astype(int)
     
     def compute_dice_coefficient(self):
+        """
+        Computes the Dice coefficient between the two brain masks.
+        
+        Returns:
+        -------
+        float
+            The Dice coefficient. Returns NaN if both masks are empty.
+        """
         volume_sum = self.mask1.sum() + self.mask2.sum()
         if volume_sum == 0:
             return np.NaN
@@ -631,6 +742,14 @@ class BrainImageMetrics:
             return 2 * volume_intersect / volume_sum
     
     def compute_jaccard_coefficient(self):
+        """
+        Computes the Jaccard coefficient between the two brain masks.
+        
+        Returns:
+        -------
+        float
+            The Jaccard coefficient. Returns NaN if the union of both masks is empty.
+        """
         volume_intersect = (self.mask1 & self.mask2).sum()
         volume_union = (self.mask1 | self.mask2).sum()
         if volume_union == 0:
@@ -639,6 +758,14 @@ class BrainImageMetrics:
             return volume_intersect / volume_union
     
     def compute_non_overlapping_percentage(self):
+        """
+        Computes the percentage of non-overlapping voxels between the two brain masks.
+        
+        Returns:
+        -------
+        float
+            The percentage of non-overlapping voxels. Returns NaN if both masks are empty.
+        """
         total_voxels_mask1 = self.mask1.sum()
         total_voxels_mask2 = self.mask2.sum()
         overlapping_voxels = (self.mask1 & self.mask2).sum()
@@ -650,5 +777,19 @@ class BrainImageMetrics:
             return np.NaN
         else:
             return (total_non_overlapping_voxels / total_voxels) * 100    
+    
+    def compute_metrics(self):
+        """
+        Computes the Dice coefficient, Jaccard coefficient, and non-overlapping percentage between the two brain masks.
+        
+        Returns:
+        -------
+        tuple
+            A tuple containing the Dice coefficient, Jaccard coefficient, and non-overlapping percentage.
+        """
+        dice_coefficient = self.compute_dice_coefficient()
+        jaccard_coefficient = self.compute_jaccard_coefficient()
+        non_overlapping_percentage = self.compute_non_overlapping_percentage()
+        return dice_coefficient, jaccard_coefficient, non_overlapping_percentage
 
     
