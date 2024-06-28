@@ -66,13 +66,10 @@ def create_input_dict(input_folder, subjects_to_skip=None, input_type='Folder'):
         print("There are", len(subjects), "unique subjects to be registered")
         
         for subject in sorted(subjects):
-            # Get the path to the subject folder
             subject_path = os.path.join(input_folder, subject)
 
-            # Get a list of session folders within the subject folder
             sessions = [f for f in os.listdir(subject_path) if os.path.isdir(os.path.join(subject_path, f))]
 
-            # Add the subject and sessions to the dictionary
             subject_sessions[subject] = sessions
 
 
@@ -262,7 +259,7 @@ def set_registration_target(file_names, target1, target2):
 
 
 def combine_images(working_dir, list_of_images, out_name, clean_up=True):
-#images should be inside working_dir somewhere 
+
 
 #def combine_images(working_dir, input_dir, participant, session, image_type, list_of_images, clean_up=True):
     """
@@ -281,16 +278,18 @@ def combine_images(working_dir, list_of_images, out_name, clean_up=True):
     command (str): The command to combine images.
     """
 
+    mask_files=[]
     for i, image in enumerate(list_of_images, start=1):
-        mask_file = f'{working_dir}/temp_{i}_{out_name}_mask.nii.gz'
+        image_name=os.path.basename(image)
+        mask_file = f'{working_dir}/temp_{i}_{image_name}_mask.nii.gz'
+        mask_files.append(mask_file)
         
-
         result = subprocess.run(['fslmaths', image, '-abs', '-bin', mask_file], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         if result.returncode != 0:
             print(result.stderr.decode())
             raise Exception(f'Failed to create mask for {image}')
     
-    mask_files = [f'{working_dir}/temp_{i}_{out_name}_mask.nii.gz' for i in range(1, len(list_of_images) + 1)]
+    #mask_files = [f'{working_dir}/temp_{i}_{out_name}_mask.nii.gz' for i in range(1, len(list_of_images) + 1)]
     output_file = f'{working_dir}/{out_name}.nii.gz'
     
     
@@ -406,7 +405,7 @@ def bias_corr(input_image, image_type, skullstrip=None, clean_up=True):
     return cmd
 
 
-def co_register(working_dir, target_image, moving_image, tag, brain_mask=None, clean_up=True):
+def co_register(working_dir, target_image, moving_image, tag="", brain_mask=None, clean_up=True):
     
     """
     Co-registers a moving image to a registration target.
@@ -448,10 +447,37 @@ def co_register(working_dir, target_image, moving_image, tag, brain_mask=None, c
                         
     return cmd
 
-def easy_reg(working_dir, source_brain, target_brain, tag, target_brain_seg=None, source_brain_seg=None, lesion_mask=None, other_brains=[], synthseg_robust=True):
+def synthseg_wrapper(input_list,output_list,synthseg_robust=True, clean_up=False):
+    
+    if os.path.exists("synthseg_inputs.txt") or os.path.exists("synthseg_outputs.txt"):
+        print(f"WARNING:  synthseg_inputs.txt and/or synthseg_outputs.txt already exists. Please delete them or use them directly.")
+        raise FileExistsError("Existing files detected")
+            
+    with open("synthseg_inputs.txt", "w") as file:
+            for item in input_list:
+                file.write(f"{item}\n")
+    with open("synthseg_outputs.txt", "w") as file:
+        for item in output_list:
+            file.write(f"{item}\n")
+    
+    cmd =[
+    "mri_synthseg",
+    "--i", "synthseg_inputs.txt", 
+    "--o", "synthseg_outputs.txt",
+    "--parc", "--robust"
+    ]
+    
+    if clean_up:
+        cmd += "rm synthseg_inputs.txt synthseg_outputs.txt"
+        
+    command=" ".join(cmd)
+    return command
+
+def easy_reg(working_dir, source_brain, target_brain, target_brain_seg=None, source_brain_seg=None, lesion_mask=None, tag="", other_brains=[], synthseg_robust=True):
 
     source_name=os.path.basename(source_brain).split('.')[0]
     target_name=os.path.basename(target_brain).split('.')[0]
+    out_name=f'{source_name}_to_{target_name}{tag}'
 
     cmd = f'echo Running EasyReg for {source_brain}\n'
     cmd += "source activate easyreg\n"
@@ -474,32 +500,40 @@ def easy_reg(working_dir, source_brain, target_brain, tag, target_brain_seg=None
         '--flo', source_brain,
         '--ref_seg', target_brain_seg,
         '--flo_seg', source_brain_seg,
-        '--flo_reg', f'{working_dir}/{source_name}_{tag}.nii.gz',
-        '--fwd_field', f'{working_dir}/{source_name}_{tag}Warp.nii.gz'
+        '--flo_reg', f'{working_dir}/{out_name}.nii.gz',
+        '--fwd_field', f'{working_dir}/{out_name}Warp.nii.gz\n'
     ])
-    
-    cmd += "\n"
+
     
     if lesion_mask:
-        cmd +=f"mri_easywarp --i {lesion_mask} --o {working_dir}/{source_name}_{tag}_lesion.nii.gz --field {working_dir}/{source_name}_{tag}Warp.nii.gz --nearest\n"
+        cmd +=f"mri_easywarp --i {lesion_mask} --o {working_dir}/{out_name}_lesion.nii.gz --field {working_dir}/{out_name}Warp.nii.gz --nearest\n"
              
     if other_brains:
         for brain in other_brains:
-            # brain_name=os.path.basename(brain).split('.')[0]
-            brain_name=os.path.basename(brain).split('_space')[0]
-            cmd +=f"mri_easywarp --i {brain} --o {working_dir}/{brain_name}_{tag}.nii.gz --field {working_dir}/{source_name}_{tag}Warp.nii.gz\n"
-
+            brain_name=os.path.basename(brain).split('.')[0]
+            #brain_name=os.path.basename(brain).split('_space')[0]
+            cmd +=f"mri_easywarp --i {brain} --o {working_dir}/{brain_name}_to_{target_name}{tag}.nii.gz --field {working_dir}/{out_name}Warp.nii.gz\n"
+    
+    cmd +=f"mkdir {working_dir}/warps_{out_name}"
+    cmd +=f"mv {working_dir}/{out_name}Warp.nii.gz {working_dir}/warps_{out_name}"
+    cmd +=f"mv {source_brain_seg} {working_dir}/warps_{out_name}"
+    
+    if os.path.exists(f'{working_dir}/{target_name}_synthseg.nii.gz'):
+        cmd +=f"mv f'{working_dir}/{target_name}_synthseg.nii.gz' {working_dir}/warps_{out_name}"
+    
     return cmd
          
-def ants_mni(working_dir, patient_brain, MNI_template, lesion_mask=None, other_brains=[], transform='s', histogram_matching=False, quick=False):
+def ants_mni(working_dir, patient_brain, MNI_template, lesion_mask=None, other_brains=[], tag="", transform='s', histogram_matching=False, quick=False):
     
     """
     Co-registers a moving image to a registration target.
 
     Parameters:
     working_dir (str): The working directory.
-    reg_image (str): The registration target image.
-    moving_image (str): The moving image.
+    patient_brain (str): Path to the patient brain to register.
+    MNI_template (str): Path to the MNI template to register to. 
+    lesion_mask (str, optional): Patient space lesion mask to apply warp field to. Must be in same space as patient_brain.
+    other_brains (list, optional): Other patient brain to apply warp field to. Must be in same space as patient_brain.
     skullstrip (bool): Whether to skullstrip the image. Default is True.
     clean_up (bool): Whether to clean up temporary files. Default is True.
 
@@ -510,67 +544,111 @@ def ants_mni(working_dir, patient_brain, MNI_template, lesion_mask=None, other_b
     patient_stem=os.path.basename(patient_brain).split('.')[0]
     
     
-    if not os.path.exists(f'{working_dir}/warps_{patient_stem}_space-MNI'):
-        os.makedirs(f'{working_dir}/warps_{patient_stem}_space-MNI')
+    if not os.path.exists(f'{working_dir}/warps_{patient_stem}_to_MNI{tag}'):
+        os.makedirs(f'{working_dir}/warps_{patient_stem}_to_MNI{tag}')
  
     
-    if os.path.exists(f"{working_dir}/{patient_stem}_space-MNI.nii.gz"):
-        print(f"WARNING: Input image file {patient_stem}_space-MNI.nii.gz already exists. Skipping Registration.")
+    if os.path.exists(f"{working_dir}/{patient_stem}_to_MNI{tag}.nii.gz"):
+        print(f"WARNING: Input image file {patient_stem}_to_MNI{tag}.nii.gz already exists. Skipping Registration.")
         return 
     
-    add_lesion_mask=''
-    if lesion_mask:
-        add_lesion_mask=f'-x {lesion_mask}'
-    
-    add_hist_match=''
-    if histogram_matching == True:
-        add_hist_match='-j 1'
-    
-    #The moving and fixed image are switched so that the lesion mask can be used in the registration
-    # Usually the fixed image, aka target, would be the MNI brain 
-    ants_cmd='antsRegistrationSyN.sh'
-    if quick:
-        ants_cmd='antsRegistrationSyNQuick.sh'
    
-    cmd = f"{ants_cmd} -d 3 -m {MNI_template} -f {patient_brain} -t {transform} {add_lesion_mask} {add_hist_match} -o {working_dir}/warps_{patient_stem}_space-MNI/{patient_stem}_MNI\n"
+    ants_cmd = ["antsRegistrationSyNQuick.sh" if quick else "antsRegistrationSyN.sh"]
+
+    ants_cmd += [
+        "-d", "3",
+        "-m", str(MNI_template),
+        "-f", str(patient_brain),
+        "-t", str(transform),
+        "-o", f"{working_dir}/warps_{patient_stem}_space-MNI/{patient_stem}_MNI{tag}"
+    ]
+
+    if lesion_mask:
+        ants_cmd.append("-x")
+        ants_cmd.append(str(lesion_mask))
+
+    if histogram_matching:
+        ants_cmd.append("-j")
+        ants_cmd.append("1")
+
     
-    cmd +=f"mv {working_dir}/warps_{patient_stem}_space-MNI/{patient_stem}_MNIInverseWarped.nii.gz {working_dir}/{patient_stem}_space-MNI.nii.gz\n"
+    mv_cmd=["mv",
+            f"{working_dir}/warps_{patient_stem}_to_MNI{tag}/{patient_stem}_to_MNI{tag}InverseWarped.nii.gz",
+            f"{working_dir}/{patient_stem}_to_MNI{tag}.nii.gz"
+           ]
+    
+
+    command_string = " && ".join([" ".join(ants_cmd), " ".join(mv_cmd)])
     
     if lesion_mask:
-        lesion_stem=lesion_mask.split('.')[0]
+        #lesion_stem=os.path.basename(lesion_mask).split('.')[0]
         lesion_cmd = [
-            'antsApplyTransforms', 
-            '-d', '3', 
-            '-i', f'{lesion_mask}', 
-            '-r', f'{MNI_template}', 
-            '-t', f'[{working_dir}/warps_{patient_stem}_space-MNI/{patient_stem}_MNI0GenericAffine.mat, 1]', 
-            '-t', f'{working_dir}/warps_{patient_stem}_space-MNI/{patient_stem}_MNI1InverseWarp.nii.gz', 
-            '-n', 'NearestNeighbor', 
-            '-o', f'{working_dir}/{lesion_stem}_space-MNI.nii.gz\n'
+            "antsApplyTransforms", 
+            "-d", "3", 
+            "-i", str(lesion_mask), 
+            "-r", str(MNI_template), 
+            "-t", f"[{working_dir}/warps_{patient_stem}_to_MNI{tag}/{patient_stem}_to_MNI{tag}0GenericAffine.mat, 1]", 
+            "-t", f"{working_dir}/warps_{patient_stem}_to_MNI{tag}/{patient_stem}_to_MNI{tag}1InverseWarp.nii.gz", 
+            "-n", "NearestNeighbor", 
+            "-o", f"{working_dir}/{patient_stem}_to_MNI{tag}_lesion.nii.gz\n"
         ]
         
-        cmd += ' '.join(lesion_cmd) + '\n'
+        command_string += " && " + " ".join(lesion_cmd)
+    
 
     if other_brains:
         for other_brain in other_brains:
-            #brain_stem=os.path.basename(other_brain).split('.')[0]
-            brain_stem=os.path.basename(other_brain).split('_space')[0]
+            brain_stem=os.path.basename(other_brain).split('.')[0]
+            #brain_stem=os.path.basename(other_brain).split('_space')[0] 
             other_brain_cmd = [
-                'antsApplyTransforms', 
-                '-d', '3', 
-                '-i', f'{other_brain}', 
-                '-r', f'{MNI_template}', 
-                '-t', f'[{working_dir}/warps_{patient_stem}_space-MNI/{patient_stem}_MNI0GenericAffine.mat, 1]', 
-                '-t', f'{working_dir}/warps_{patient_stem}_space-MNI/{patient_stem}_MNI1InverseWarp.nii.gz', 
-                '-n', 'Linear', 
-                '-o', f'{working_dir}/{brain_stem}_space-MNI.nii.gz\n'
+                "antsApplyTransforms", 
+                "-d", "3", 
+                "-i", f"{other_brain}", 
+                "-r", f"{MNI_template}", 
+                "-t", f"[{working_dir}/warps_{patient_stem}_to_MNI/{patient_stem}_to_MNI{tag}0GenericAffine.mat, 1]", 
+                "-t", f"{working_dir}/warps_{patient_stem}_to_MNI/{patient_stem}_t0_MNI{tag}1InverseWarp.nii.gz", 
+                "-n", "Linear", 
+                "-o", f"{working_dir}/{brain_stem}_to_MNI{tag}.nii.gz\n"
             ]
         
-            cmd += ' '.join(other_brain_cmd) + '\n'
-    
-                         
-    return cmd
+            command_string += " && " + " ".join(other_brain_cmd)
+              
+    return command_string
 
+class BrainImageMetrics:
+    def __init__(self, brain_path1, brain_path2):
+        self.img1 = nib.load(brain_path1)
+        self.img2 = nib.load(brain_path2)
+        self.mask1 = (np.array(self.img1.dataobj) > 0).astype(int)
+        self.mask2 = (np.array(self.img2.dataobj) > 0).astype(int)
     
+    def compute_dice_coefficient(self):
+        volume_sum = self.mask1.sum() + self.mask2.sum()
+        if volume_sum == 0:
+            return np.NaN
+        else:
+            volume_intersect = (self.mask1 & self.mask2).sum()
+            return 2 * volume_intersect / volume_sum
+    
+    def compute_jaccard_coefficient(self):
+        volume_intersect = (self.mask1 & self.mask2).sum()
+        volume_union = (self.mask1 | self.mask2).sum()
+        if volume_union == 0:
+            return np.NaN
+        else:
+            return volume_intersect / volume_union
+    
+    def compute_non_overlapping_percentage(self):
+        total_voxels_mask1 = self.mask1.sum()
+        total_voxels_mask2 = self.mask2.sum()
+        overlapping_voxels = (self.mask1 & self.mask2).sum()
+        non_overlapping_voxels_mask1 = total_voxels_mask1 - overlapping_voxels
+        non_overlapping_voxels_mask2 = total_voxels_mask2 - overlapping_voxels
+        total_non_overlapping_voxels = non_overlapping_voxels_mask1 + non_overlapping_voxels_mask2
+        total_voxels = total_voxels_mask1 + total_voxels_mask2
+        if total_voxels == 0:
+            return np.NaN
+        else:
+            return (total_non_overlapping_voxels / total_voxels) * 100    
 
     
