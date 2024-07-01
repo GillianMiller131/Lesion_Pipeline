@@ -14,6 +14,8 @@ import numpy as np
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
 
+niftymic_dir = '/lab-share/Neuro-Cohen-e2/Public/containers'
+
 def print_tree(d, n=5, indent=0):
     """
     Recursively prints the folder structure.
@@ -312,7 +314,7 @@ def combine_images(working_dir, list_of_images, out_name, clean_up=True):
         'singularity', 'exec',
         '-B', f'{working_dir}:/app/data',
         '-B', f'{script_dir}:{script_dir}',
-        f'{script_dir}/niftymic.sif',
+        f'{niftymic_dir}/niftymic.sif',
         'niftymic_reconstruct_volume',
         '--filenames', *list_of_images,
         '--filenames-masks', *mask_files,
