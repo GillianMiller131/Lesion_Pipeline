@@ -459,7 +459,7 @@ def co_register(working_dir, target_image, moving_image, tag="", brain_mask=None
                         
     return cmd
 
-def synthseg_wrapper(input_list,output_list=[],synthseg_robust=True, clean_up=False):
+def synthseg_wrapper(input_list,output_list=[],robust=True, clean_up=False):
     
     """
     Generates a command to run synthseg on a list of input images. Faster than instantiating individual calls.
@@ -473,12 +473,12 @@ def synthseg_wrapper(input_list,output_list=[],synthseg_robust=True, clean_up=Fa
     """
     
     if os.path.exists("synthseg_inputs.txt") or os.path.exists("synthseg_outputs.txt"):
-        print(f"WARNING:  synthseg_inputs.txt and/or synthseg_outputs.txt already exists. Please delete them or use them directly.")
+        print(f"WARNING:  synthseg_inputs.txt and/or synthseg_outputs.txt already exists.")
         raise FileExistsError("Existing files detected")
     
     if not output_list:
         output_list=[i.split('.')[0]+'_synthseg.nii.gz' for i in input_list]
-            
+    
     with open("synthseg_inputs.txt", "w") as file:
             for item in input_list:
                 file.write(f"{item}\n")
@@ -490,8 +490,11 @@ def synthseg_wrapper(input_list,output_list=[],synthseg_robust=True, clean_up=Fa
     "mri_synthseg",
     "--i", "synthseg_inputs.txt", 
     "--o", "synthseg_outputs.txt",
-    "--parc", "--robust"
+    "--parc"
     ]
+    
+    if robust:
+        cmb.append("--robust")
     
     if clean_up:
         cmd += "rm synthseg_inputs.txt synthseg_outputs.txt"
