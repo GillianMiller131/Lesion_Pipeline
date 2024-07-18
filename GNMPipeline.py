@@ -62,7 +62,7 @@ def create_input_dict(input_folder, subjects_to_skip=None, input_type='Folder'):
     subject_sessions = {}
     
     if input_type=='BIDS':
-        subjects=[f for f in os.listdir(input_folder) if os.path.isdir(os.path.join(input_folder, f))]
+        subjects=[f for f in os.listdir(input_folder) if os.path.isdir(os.path.join(input_folder, f)) and not f.startswith('.')]
         
         if subjects_to_skip is not None:
             subjects = [subject for subject in subjects if subject not in subjects_to_skip]
@@ -72,8 +72,7 @@ def create_input_dict(input_folder, subjects_to_skip=None, input_type='Folder'):
         for subject in sorted(subjects):
             subject_path = os.path.join(input_folder, subject)
 
-            sessions = [f for f in os.listdir(subject_path) if os.path.isdir(os.path.join(subject_path, f))]
-
+            sessions = [f for f in os.listdir(subject_path) if os.path.isdir(os.path.join(subject_path, f)) and not f.startswith('.')]
             subject_sessions[subject] = sessions
 
 
