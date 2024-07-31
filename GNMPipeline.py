@@ -6,7 +6,6 @@ import nibabel as nib
 import subprocess
 import sys
 import matplotlib_inline
-from tqdm import tqdm
 import tempfile
 from pathlib import Path
 from time import sleep
@@ -312,6 +311,57 @@ def combine_images(working_dir, list_of_images, out_name, clean_up=True):
     cmd = [
         'singularity', 'exec',
         '-B', f'{working_dir}:/app/data',
+        '-B', f'{niftymic_dir}:{niftymic_dir}',
+        f'{niftymic_dir}/niftymic.sif',
+        'niftymic_reconstruct_volume',
+        '--filenames', *list_of_images,
+        '--filenames-masks', *mask_files,
+        '--output', output_file
+    ]
+    
+    if clean_up == True:
+        cmd += '\n'
+        cmd += [
+            'rm', '-r', 
+            f'{working_dir}/config*', 
+            f'{working_dir}/temp*',  
+            f'{working_dir}/motion_correction'
+        ]
+        
+    command = ' '.join(cmd)
+
+    return command
+
+def combine_images_patch(working_dir, list_of_images, out_name, clean_up=True):
+
+    """
+    Generates a command to combine images of different directions using niftymic.
+    
+    Parameters:
+    working_dir (str): The working directory.
+    list_of_images (list of Nifti-like objects): The list of images to combine.
+    out_name (str): The name of the output image. 
+    clean_up (bool): Whether to clean up temporary files. Default is True.
+    
+    Returns:
+    command (str): The command to combine images.
+    """
+
+    cmd = []
+    mask_files=[]
+    for i, image in enumerate(list_of_images, start=1):
+        image_name=os.path.basename(image)
+        mask_file = f'{working_dir}/temp_{i}_{image_name}_mask.nii.gz'
+        mask_files.append(mask_file)
+        
+        cmd += ['fslmaths', image, '-abs', '-bin', mask_file, '\n']
+
+    output_file = f'{working_dir}/{out_name}.nii.gz'
+    
+    
+    cmd += [
+        'singularity', 'exec',
+        '-B', f'{working_dir}:/app/data',
         '-B', f'{script_dir}:{script_dir}',
         f'{niftymic_dir}/niftymic.sif',
         'niftymic_reconstruct_volume',
@@ -495,7 +545,7 @@ def synthseg_wrapper(input_list,output_list=[],robust=True, clean_up=False):
     ]
     
     if robust:
-        cmb.append("--robust")
+        cmd.append("--robust")
     
     if clean_up:
         cmd += "rm synthseg_inputs.txt synthseg_outputs.txt"
