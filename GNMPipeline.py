@@ -1,7 +1,7 @@
 import os
 import shutil
 from glob import glob
-from nilearn import plotting
+from nilearn import plotting, image
 import nibabel as nib
 import subprocess
 import sys
@@ -310,8 +310,7 @@ def combine_images(working_dir, list_of_images, out_name, clean_up=True):
     
     cmd = [
         'singularity', 'exec',
-        '-B', f'{working_dir}:/app/data',
-        '-B', f'{niftymic_dir}:{niftymic_dir}',
+        '-B', f'{working_dir}:{working_dir}',
         f'{niftymic_dir}/niftymic.sif',
         'niftymic_reconstruct_volume',
         '--filenames', *list_of_images,
@@ -444,7 +443,7 @@ def bias_corr(input_image, image_type, skullstrip='synthstrip', clean_up=True):
 
     # Rename files
     cmd += f"mv {stem}.nii.gz {stem}_orig.nii.gz\n" 
-    cmd += f"mv {stem}.anat/T1_biascorr.nii.gz {stem}.nii.gz\n" 
+    cmd += f"mv {stem}.anat/{image_type}_biascorr.nii.gz {stem}.nii.gz\n" 
 
     
     if skullstrip in ['optibet', 'both']:
@@ -467,6 +466,50 @@ def bias_corr(input_image, image_type, skullstrip='synthstrip', clean_up=True):
         
     return cmd
 
+def bias_corr_no_bet(input_image, image_type, skullstrip='synthstrip', clean_up=True):
+
+    """
+    Generates a command to bias correct, crop, and reorient an image using fsl_anat_alt.sh but skips BET using the --nobet flag
+
+    """
+
+    stem = input_image.split('.')[0] 
+    folder = os.path.dirname(input_image)
+    cmd="echo Starting\n"
+    if os.path.exists(f"{stem}_orig.nii.gz"):
+        print(f'{stem}_orig.nii.gz already exists, suggesting this image has been bias corrected already!')
+        return
+    
+    # add scripts to Path so code can find them
+    cmd = f"export PATH=$PATH:{script_dir}\n"
+    
+    # Run fsl_anat_alt.sh
+    cmd += f"fsl_anat_alt.sh -i {stem} -t {image_type} --noreg --nosubcortseg --noseg --nobet --nononlinreg\n"
+
+    # Rename files
+    cmd += f"mv {stem}.nii.gz {stem}_orig.nii.gz\n" 
+    cmd += f"mv {stem}.anat/{image_type}_biascorr.nii.gz {stem}.nii.gz\n" 
+
+    
+    if skullstrip in ['optibet', 'both']:
+        suffix = '_optibet'
+        cmd += f"mv {stem}.anat/{image_type}_biascorr_brain.nii.gz {stem}_SkullStripped{suffix}.nii.gz\n"
+        cmd += f"mv {stem}.anat/{image_type}_biascorr_brain_mask.nii.gz {stem}_brain-mask{suffix}.nii.gz\n"
+    
+    if skullstrip in ['synthstrip', 'both']:
+        suffix = '_synthstrip'
+        out_file = f"{stem}_SkullStripped{suffix}.nii.gz"
+        out_mask = f"{stem}_brain-mask{suffix}.nii.gz"
+        cmd += f"mri_synthstrip -i {input_image} -o {out_file} -m {out_mask}\n"
+
+        
+    # Run fslmaths
+    cmd += f"fslmaths {stem}.nii.gz {stem}.nii.gz -odt short\n"
+    
+    if clean_up == True:
+        cmd += f"rm -r {stem}.anat\n"
+        
+    return cmd
 
 def co_register(working_dir, target_image, moving_image, tag="", brain_mask=None, clean_up=True):
     
@@ -510,37 +553,55 @@ def co_register(working_dir, target_image, moving_image, tag="", brain_mask=None
                         
     return cmd
 
-def synthseg_wrapper(input_list,output_list=[],robust=True, clean_up=False):
+def synthseg_wrapper(input_list,output_list=[],robust=True, clean_up=False, use_existing=False):
     
     """
     Generates a command to run synthseg on a list of input images. Faster than instantiating individual calls.
     
     Parameters:
-    input_list (list of Nifti-like objects): Paths to files to segment.
-    output_list (list of output files paths, optional): Paths the output segmentations will be saved. If none provided, appends '_synthseg' to input name. 
+    input_list (list of str or txt file): Paths to files to segment or txt file with paths.
+    output_list (list of str or txt file, optional): Paths where the output segmentations will be saved. If not provided, appends '_synthseg' to input name.  
+    robust (bool, optional): If True, include additional options for robustness. Defaults to True.
+    clean_up (bool, optional): If True, include options to clean up intermediate files. Defaults to False.
+    use_existing (bool, optional): If True, use existing input and output text files if they exist. Defaults to False.
+    
     
     Returns:
     command (str): The command to run.
     """
-    
-    if os.path.exists("synthseg_inputs.txt") or os.path.exists("synthseg_outputs.txt"):
-        print(f"WARNING:  synthseg_inputs.txt and/or synthseg_outputs.txt already exists.")
-        raise FileExistsError("Existing files detected")
-    
-    if not output_list:
-        output_list=[i.split('.')[0]+'_synthseg.nii.gz' for i in input_list]
-    
-    with open("synthseg_inputs.txt", "w") as file:
-            for item in input_list:
+    if not use_existing:
+
+        input_txt="synthseg_inputs.txt"
+        output_txt="synthseg_outputs.txt"
+        
+        if os.path.exists("synthseg_inputs.txt") or os.path.exists("synthseg_outputs.txt"):
+            raise FileExistsError("Existing files detected. Synthseg_inputs.txt and/or synthseg_outputs.txt already exists and you have use_existing=False.")
+        
+        if not output_list:
+            output_list=[i.split('.')[0]+'_synthseg.nii.gz' for i in input_list]
+        
+        with open("synthseg_inputs.txt", "w") as file:
+                for item in input_list:
+                    file.write(f"{item}\n")
+        with open("synthseg_outputs.txt", "w") as file:
+            for item in output_list:
                 file.write(f"{item}\n")
-    with open("synthseg_outputs.txt", "w") as file:
-        for item in output_list:
-            file.write(f"{item}\n")
+                
+    elif use_existing:
+        input_txt=input_list
+        output_txt=output_list
+
+        if not os.path.exists(input_txt):
+            raise FileExistsError("Input List not detected and you opted to use_existing=True") 
+
+        if not os.path.exists(output_txt):
+            raise FileExistsError("Output List not detected and you opted to use_existing=True") 
+        
     
     cmd =[
     "mri_synthseg",
-    "--i", "synthseg_inputs.txt", 
-    "--o", "synthseg_outputs.txt",
+    "--i", input_txt, 
+    "--o", output_txt,
     "--parc"
     ]
     
@@ -553,7 +614,7 @@ def synthseg_wrapper(input_list,output_list=[],robust=True, clean_up=False):
     command=" ".join(cmd)
     return command
 
-def easy_reg(working_dir, source_brain, target_brain, target_brain_seg=None, source_brain_seg=None, lesion_mask=None, tag="", other_brains=[], synthseg_robust=False, affine=False):
+def easy_reg(working_dir, source_brain, target_brain, target_brain_seg=None, source_brain_seg=None, lesion_mask=None, tag="", other_brains=[], synthseg_robust=False, affine=False, clean_up=False):
     
     """
     Generates a command to run the EasyReg pipeline for brain image registration and optional lesion masking.
@@ -624,10 +685,36 @@ def easy_reg(working_dir, source_brain, target_brain, target_brain_seg=None, sou
     cmd.append(f"mv {working_dir}/{out_name}Warp.nii.gz {working_dir}/warps_{out_name}\n")
     cmd.append(f"mv {source_brain_seg} {working_dir}/warps_{out_name}\n")
     
-    if os.path.exists(f'{working_dir}/{target_name}_synthseg.nii.gz'):
+    if os.path.exists(f'{working_dir}/{target_name}_synthseg.nii.gz') and clean_up:
         cmd +=f"mv f'{working_dir}/{target_name}_synthseg.nii.gz' {working_dir}/warps_{out_name}"
     
     return "\n".join(cmd)
+
+def invert_mask(lesion_mask):
+    """
+    Generates and inverse lesion mask to use with ANTs
+
+    Parameters:
+    lesion_mask (str): Path to the lesion mask. 
+    
+    """
+    if lesion_mask.endswith('.nii.gz'):
+        file_without_extension = lesion_mask.replace('.nii.gz', '')
+    elif lesion_mask.endswith('.nii'):
+        file_without_extension = lesion_mask.replace('.nii', '')
+    inverse_lesion_mask=file_without_extension+'_inverse.nii.gz'
+
+    if not os.path.exists(inverse_lesion_mask):
+        cmd=f"fslmaths {lesion_mask} -sub 1 -abs {inverse_lesion_mask}"
+        
+        result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+        
+        if result.returncode == 0:
+            print(f"Inverse lesion mask created: {inverse_lesion_mask}")
+        else:
+            print(f"Error: {result.stderr}")
+    
+    return inverse_lesion_mask
          
 def ants_mni(working_dir, patient_brain, MNI_template, lesion_mask=None, other_brains=[], tag="", transform='s', histogram_matching=False, quick=False):
     
@@ -671,12 +758,13 @@ def ants_mni(working_dir, patient_brain, MNI_template, lesion_mask=None, other_b
         "-m", str(MNI_template),
         "-f", str(patient_brain),
         "-t", str(transform),
-        "-o", f"{working_dir}/warps_{patient_stem}_space-MNI/{patient_stem}_MNI{tag}"
+        "-o", f"{working_dir}/warps_{patient_stem}_to_MNI{tag}/{patient_stem}_to_MNI{tag}"
     ]
 
     if lesion_mask:
+        inverse_lesion_mask=invert_mask(lesion_mask)
         ants_cmd.append("-x")
-        ants_cmd.append(str(lesion_mask))
+        ants_cmd.append(str(inverse_lesion_mask))
 
     if histogram_matching:
         ants_cmd.append("-j")
@@ -716,8 +804,8 @@ def ants_mni(working_dir, patient_brain, MNI_template, lesion_mask=None, other_b
                 "-d", "3", 
                 "-i", f"{other_brain}", 
                 "-r", f"{MNI_template}", 
-                "-t", f"[{working_dir}/warps_{patient_stem}_to_MNI/{patient_stem}_to_MNI{tag}0GenericAffine.mat, 1]", 
-                "-t", f"{working_dir}/warps_{patient_stem}_to_MNI/{patient_stem}_t0_MNI{tag}1InverseWarp.nii.gz", 
+                "-t", f"[{working_dir}/warps_{patient_stem}_to_MNI{tag}/{patient_stem}_to_MNI{tag}0GenericAffine.mat, 1]", 
+                "-t", f"{working_dir}/warps_{patient_stem}_to_MNI{tag}/{patient_stem}_t0_MNI{tag}1InverseWarp.nii.gz", 
                 "-n", "Linear", 
                 "-o", f"{working_dir}/{brain_stem}_to_MNI{tag}.nii.gz\n"
             ]
